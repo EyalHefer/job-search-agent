@@ -8,7 +8,7 @@ import pytest
 from job_agent.config import Config
 from job_agent.digest import write_digest
 from job_agent.memory import Memory
-from job_agent.pipeline import drop_duplicates, run
+from job_agent.pipeline import cap_unverified, drop_duplicates, run
 
 NOW = datetime(2030, 1, 15, 9, 0)
 
@@ -118,6 +118,14 @@ def test_second_round_gets_full_text_and_past_feedback(config):
     assert args[args.index("--max-chars") + 1] == "4000"
     feedback_file = Path(args[[i for i, a in enumerate(args) if a == "--context"][-1] + 1])
     assert "QA Automation (Acme): applied, reason: good stack" in feedback_file.read_text(encoding="utf-8")
+
+
+def test_unread_title_only_job_is_capped_but_read_or_detailed_jobs_are_not():
+    def scored(status, confidence):
+        return {"item": {"page_status": status}, "score": 92, "confidence": confidence, "why": "", "gaps": ""}
+    assert cap_unverified(scored("unknown", "low"))["score"] == 80
+    assert cap_unverified(scored("unknown", "high"))["score"] == 92  # the post itself had details
+    assert cap_unverified(scored("open", "low"))["score"] == 92
 
 
 def test_same_job_posted_twice_is_kept_once():

@@ -20,6 +20,7 @@ from .skills import SkillRunner
 
 FULL_TEXT_CHARS = 4000
 DUPLICATE_SIMILARITY = 0.8
+UNVERIFIED_MAX = 80
 
 
 @dataclass
@@ -72,6 +73,7 @@ def run(config: Config, skills: SkillRunner, memory: Memory, now: datetime,
                                         "--max-chars", FULL_TEXT_CHARS], to_rescore)
     # If the second round fails for a job, fall back to its first-round score.
     rescored = second["scored"] + [_first_round(first, item) for item in second["unscored"]]
+    rescored = [cap_unverified(s) for s in rescored]
     rescored.sort(key=lambda s: -s["score"])
     for s in rescored:
         memory.remember(s["item"]["key"], seen=now.isoformat(), first_score=s["item"]["first_score"],
@@ -81,6 +83,15 @@ def run(config: Config, skills: SkillRunner, memory: Memory, now: datetime,
     memory.save()
     memory.save_run_details({"pages": pages, "rescored": rescored})
     return RunResult(digest, stats)
+
+
+def cap_unverified(scored: dict) -> dict:
+    """A job judged from a thin post, whose page could not be read, cannot earn a top score.
+    The scoring instructions say so too, but the model does not always follow them."""
+    item = scored["item"]
+    if item.get("page_status") != "open" and scored["confidence"] == "low" and scored["score"] > UNVERIFIED_MAX:
+        return {**scored, "score": UNVERIFIED_MAX}
+    return scored
 
 
 def with_page_text(entry: dict) -> dict:
