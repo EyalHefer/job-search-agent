@@ -1,0 +1,14 @@
+# A job is dropped when any word in `exclude` appears in one of `fields`.
+# Whole words, any case. `*` at the start or end of a word allows more letters there.
+rules:
+  - name: seniority
+    fields: [title]
+    exclude: [senior, sr., lead, manager, principal, architect, director, "head of"]
+  - name: field
+    fields: [title]
+    exclude: [hardware, marketing, sales, finance, "recruit*", designer]
+
+# The rest is read by the model as context.
+target_roles: [QA Automation, Backend, Full Stack, Software Engineer]
+employment_type: full_time
+location_preference: [center, north]

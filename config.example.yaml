@@ -1,0 +1,16 @@
+# Copy to config.yaml and edit. Relative paths are relative to this file.
+# Keep your personal files (exports, profile, data, .env) outside the repo, or in private/ which git ignores.
+
+skills_dir: ../ai-agent-skills/skills     # a clone of github.com/EyalHefer/ai-agent-skills
+exports_dir: private/exports              # WhatsApp group exports (.zip or .txt)
+profile: private/profile.md               # who you are: skills, projects, education. No name, phone or ID.
+preferences: private/preferences.yaml     # keyword rules and preferences, see examples/
+scoring: private/scoring.md               # how the model should score, see examples/
+data_dir: private/data                    # what the agent remembers between runs
+env_file: private/.env                    # GEMINI_API_KEY=...
+
+max_age_days: 14       # ignore posts older than this
+read_min_score: 65     # first-round score needed to open the job page
+read_limit: 20         # most job pages opened per run
+digest_min_score: 70
+digest_size: 10
