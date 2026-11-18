@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-PATH_KEYS = ["skills_dir", "exports_dir", "profile", "preferences", "scoring", "data_dir", "env_file"]
+PATH_KEYS = ["skills_dir", "exports_dir", "profile", "preferences", "scoring", "data_dir", "env_file", "inbox_dir"]
 
 
 @dataclass
@@ -18,6 +18,7 @@ class Config:
     scoring: Path
     data_dir: Path
     env_file: Path | None = None
+    inbox_dir: Path | None = None   # jobs shared by hand to the Telegram bot, see worker/
     max_age_days: int = 14          # older posts are probably filled already
     read_min_score: int = 65        # first-round score needed to open the job page
     read_limit: int = 20            # most job pages opened per run

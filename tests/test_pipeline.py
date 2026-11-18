@@ -9,6 +9,7 @@ from job_agent.config import Config
 from job_agent.digest import write_digest
 from job_agent.memory import Memory
 from job_agent.pipeline import cap_unverified, drop_duplicates, run
+from job_agent.skills import SkillError
 
 NOW = datetime(2030, 1, 15, 9, 0)
 
@@ -21,8 +22,9 @@ def job(key, title, company="", text="post text"):
 class FakeSkills:
     """Plays each skill's part, and records what it was given."""
 
-    def __init__(self, posts, first_scores, page_status, second_scores, rejected=()):
+    def __init__(self, posts, first_scores, page_status, second_scores, rejected=(), shared=(), worker_down=False):
         self.posts, self.first_scores, self.page_status = posts, first_scores, page_status
+        self.shared, self.worker_down = list(shared), worker_down
         self.second_scores, self.rejected = second_scores, set(rejected)
         self.calls = []
         self.matcher_round = 0
@@ -31,6 +33,12 @@ class FakeSkills:
         self.calls.append((name, [str(a) for a in args], data))
         if name == "whatsapp-export-reader":
             return self.posts
+        if name == "telegram-inbox":
+            if args[0] == "pull":
+                if self.worker_down:
+                    raise SkillError("telegram-inbox failed (exit code 1)")
+                return {"pulled": len(self.shared), "saved": len(self.shared)}
+            return self.shared
         if name == "rule-filter":
             return {"kept": [j for j in data if j["key"] not in self.rejected],
                     "rejected": [{"item": j, "rule": "field", "matched": "x"} for j in data if j["key"] in self.rejected]}
@@ -118,6 +126,39 @@ def test_second_round_gets_full_text_and_past_feedback(config):
     assert args[args.index("--max-chars") + 1] == "4000"
     feedback_file = Path(args[[i for i, a in enumerate(args) if a == "--context"][-1] + 1])
     assert "QA Automation (Acme): applied, reason: good stack" in feedback_file.read_text(encoding="utf-8")
+
+
+def test_jobs_shared_to_the_bot_join_the_exported_ones(config):
+    config.inbox_dir = config.data_dir / "inbox"
+    shared = [{**job("a", "Automation"), "group": "telegram-inbox"}, {**job("t", "Data"), "group": "telegram-inbox"}]
+    skills = FakeSkills([job("a", "Automation")], {"a": 90, "t": 85}, {"a": "open", "t": "open"},
+                        {"a": 90, "t": 85}, shared=shared)
+    result = run(config, skills, Memory(config.data_dir), NOW, log=lambda m: None)
+
+    assert [j["item"]["key"] for j in result.digest] == ["a", "t"]
+    assert result.digest[0]["item"]["group"] == "Jobs group"   # the export's copy is kept
+    assert result.stats["posts"] == 2
+    inbox_calls = [args for name, args, _ in skills.calls if name == "telegram-inbox"]
+    assert [a[0] for a in inbox_calls] == ["pull", "read"]
+    assert inbox_calls[1][-2:] == ["--since", "2030-01-01T09:00:00"]
+
+
+def test_unreachable_inbox_does_not_stop_the_run(config):
+    config.inbox_dir = config.data_dir / "inbox"
+    shared = [{**job("t", "Data"), "group": "telegram-inbox"}]   # collected on an earlier run
+    skills = FakeSkills([job("a", "Automation")], {"a": 90, "t": 85}, {"a": "open", "t": "open"},
+                        {"a": 90, "t": 85}, shared=shared, worker_down=True)
+    logged = []
+    result = run(config, skills, Memory(config.data_dir), NOW, log=logged.append)
+
+    assert [j["item"]["key"] for j in result.digest] == ["a", "t"]
+    assert any("Telegram inbox" in m and "before" in m for m in logged)
+
+
+def test_no_inbox_configured_means_no_inbox_calls(config):
+    skills = FakeSkills([job("a", "Automation")], {"a": 90}, {"a": "open"}, {"a": 90})
+    run(config, skills, Memory(config.data_dir), NOW, log=lambda m: None)
+    assert "telegram-inbox" not in [name for name, _, _ in skills.calls]
 
 
 def test_unread_title_only_job_is_capped_but_read_or_detailed_jobs_are_not():

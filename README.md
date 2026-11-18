@@ -45,6 +45,10 @@ python -m playwright install chromium
 2. Write your profile, preferences and scoring instructions. Start from [examples/](examples/).
 3. Put a free Gemini API key in the `.env` file: `GEMINI_API_KEY=...`
 4. Export your job groups from WhatsApp (group → More → Export chat → without media) into the exports folder.
+5. Optional, for groups that block exporting: share job posts by hand to a private Telegram bot.
+   Set it up as in [worker/README.md](worker/README.md), then set `inbox_dir` in `config.yaml` and
+   `INBOX_URL` and `INBOX_TOKEN` in `.env`. Each run collects the shared posts first; if the Worker
+   cannot be reached, the run goes on with the exports and what was collected before.
 
 ## Run
 

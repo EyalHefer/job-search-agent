@@ -1,6 +1,6 @@
 """One run of the agent:
 
-1. read job posts from the WhatsApp exports
+1. read job posts from the WhatsApp exports, and from the Telegram inbox when one is set
 2. skip jobs already handled in earlier runs
 3. drop clearly irrelevant jobs with keyword rules (no LLM)
 4. score the rest against the profile, from the post text
@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 from .config import Config
 from .memory import Memory
-from .skills import SkillRunner
+from .skills import SkillError, SkillRunner
 
 FULL_TEXT_CHARS = 4000
 DUPLICATE_SIMILARITY = 0.8
@@ -36,6 +36,8 @@ def run(config: Config, skills: SkillRunner, memory: Memory, now: datetime,
 
     log(f"Reading job posts since {since:%d.%m.%Y}")
     jobs = skills("whatsapp-export-reader", [config.exports_dir, "--since", since.isoformat()])
+    if config.inbox_dir:
+        jobs = merge_by_key(jobs, read_inbox(config, skills, since, log))
     decided = memory.decided_jobs()
     new = [job for job in jobs if job["key"] not in memory.seen
            and job["key"] not in decided and job["url"] not in decided]
@@ -83,6 +85,23 @@ def run(config: Config, skills: SkillRunner, memory: Memory, now: datetime,
     memory.save()
     memory.save_run_details({"pages": pages, "rescored": rescored})
     return RunResult(digest, stats)
+
+
+def read_inbox(config: Config, skills: SkillRunner, since: datetime, log=print) -> list[dict]:
+    """Jobs shared by hand to the Telegram bot. Collecting new ones needs the Worker; if it cannot be
+    reached, the run goes on with what was collected before, and the new ones wait there for next time."""
+    try:
+        pulled = skills("telegram-inbox", ["pull", config.inbox_dir])
+        log(f"{pulled['saved']} new messages from the Telegram inbox")
+    except SkillError as e:
+        log(f"Could not collect from the Telegram inbox ({e}); using what was collected before")
+    return skills("telegram-inbox", ["read", config.inbox_dir, "--since", since.isoformat()])
+
+
+def merge_by_key(first: list[dict], second: list[dict]) -> list[dict]:
+    """A job shared to the bot may also be in an export. Keeps the first copy of each key."""
+    keys = {job["key"] for job in first}
+    return first + [job for job in second if job["key"] not in keys]
 
 
 def cap_unverified(scored: dict) -> dict:

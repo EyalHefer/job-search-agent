@@ -7,7 +7,8 @@ profile: private/profile.md               # who you are: skills, projects, educa
 preferences: private/preferences.yaml     # keyword rules and preferences, see examples/
 scoring: private/scoring.md               # how the model should score, see examples/
 data_dir: private/data                    # what the agent remembers between runs
-env_file: private/.env                    # GEMINI_API_KEY=...
+env_file: private/.env                    # GEMINI_API_KEY=..., and INBOX_URL / INBOX_TOKEN for the inbox
+inbox_dir: private/inbox                  # optional: jobs shared to the Telegram bot (see worker/README.md)
 
 max_age_days: 14       # ignore posts older than this
 read_min_score: 65     # first-round score needed to open the job page
