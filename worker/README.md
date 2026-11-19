@@ -43,8 +43,19 @@ npx wrangler secret put CHAT_ID
 npx wrangler deploy
 ```
 
-Then point the bot at the Worker:
+Then connect the bot. Put `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SECRET` and `INBOX_URL` in the private `.env`,
+send the bot any message, and run:
 
 ```
-https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=<WORKER_URL>/telegram&secret_token=<TELEGRAM_SECRET>&allowed_updates=["message"]
+python connect_bot.py <path to .env>
+```
+
+It finds your chat id from that message, saves it to `.env` as `CHAT_ID`, and sets the bot's webhook to
+`<INBOX_URL>/telegram` with the secret. It never prints the token, the secret or the chat id. Upload the
+chat id afterwards, from the folder holding `.env` (no non-ASCII paths in the command, since a right-to-left
+path can come out reversed when pasted):
+
+```
+grep "^CHAT_ID=" .env | cut -d= -f2- | tr -d '
+' | (cd <this folder> && npx wrangler secret put CHAT_ID)
 ```
