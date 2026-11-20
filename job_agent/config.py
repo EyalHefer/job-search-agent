@@ -24,6 +24,7 @@ class Config:
     read_limit: int = 20            # most job pages opened per run
     digest_min_score: int = 70
     digest_size: int = 10
+    telegram: bool = False          # send the digest to my Telegram chat (TELEGRAM_BOT_TOKEN, CHAT_ID)
 
 
 def load_config(path: Path) -> Config:

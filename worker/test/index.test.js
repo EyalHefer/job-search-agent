@@ -1,16 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import worker, { sameSecret } from "../src/index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import worker, { markChosen, safeFileName, sameSecret } from "../src/index.js";
 
 // An in-memory stand-in for Cloudflare KV, with the same methods the Worker uses.
 class FakeKV {
   constructor() {
     this.data = new Map();
   }
-  async put(key, value) {
-    this.data.set(key, value);
+  async put(key, value, options = {}) {
+    this.data.set(key, { value, metadata: options.metadata });
   }
   async get(key) {
-    return this.data.get(key) ?? null;
+    return this.data.get(key)?.value ?? null; // stores values as given, so "arrayBuffer" reads need nothing more
   }
   async delete(key) {
     this.data.delete(key);
@@ -20,7 +20,7 @@ class FakeKV {
     const start = cursor ? Number(cursor) : 0;
     const page = names.slice(start, start + 2); // tiny pages, to exercise the cursor loop
     const done = start + 2 >= names.length;
-    return { keys: page.map((name) => ({ name })), list_complete: done, cursor: done ? undefined : String(start + 2) };
+    return { keys: page.map((name) => ({ name, metadata: this.data.get(name).metadata })), list_complete: done, cursor: done ? undefined : String(start + 2) };
   }
 }
 
@@ -28,7 +28,10 @@ const MY_CHAT = 1000;
 let env;
 
 beforeEach(() => {
-  env = { INBOX: new FakeKV(), TELEGRAM_SECRET: "tg-secret", INBOX_TOKEN: "inbox-token", CHAT_ID: String(MY_CHAT) };
+  env = {
+    INBOX: new FakeKV(), TELEGRAM_SECRET: "tg-secret", INBOX_TOKEN: "inbox-token", CHAT_ID: String(MY_CHAT),
+    TELEGRAM_BOT_TOKEN: "bot-token", GITHUB_TOKEN: "gh-token", GITHUB_REPO: "me/private",
+  };
 });
 
 function fromTelegram(update, secret = "tg-secret") {
@@ -123,4 +126,154 @@ it("sameSecret needs an exact, non-empty match", () => {
   expect(sameSecret("abcd", "abc")).toBe(false);
   expect(sameSecret("", "")).toBe(false);
   expect(sameSecret(null, "abc")).toBe(false);
+});
+
+// ---- outside calls (Telegram's API and GitHub's) are answered by a fake fetch ----
+
+let calls;
+function fakeFetch(handler) {
+  calls = [];
+  vi.stubGlobal("fetch", async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    return handler(String(url), init);
+  });
+}
+afterEach(() => vi.unstubAllGlobals());
+
+const BUTTONS = { inline_keyboard: [[{ text: "✅ הגשתי", callback_data: "applied" }, { text: "❌ לא הגשתי", callback_data: "skipped" }]] };
+
+function press(id, choice, chat = MY_CHAT) {
+  return fromTelegram({
+    update_id: id,
+    callback_query: { id: "q" + id, data: choice, message: { message_id: 55, date: 1, chat: { id: chat }, reply_markup: BUTTONS } },
+  });
+}
+
+describe("feedback on digest jobs", () => {
+  it("a button press is saved with the message it was on, and the button is marked", async () => {
+    fakeFetch(() => Response.json({ ok: true, result: true }));
+    const res = await press(10, "applied");
+    expect(await res.json()).toEqual({ method: "answerCallbackQuery", callback_query_id: "q10", text: "נשמר" });
+    const { events } = await (await agent("GET", "/inbox")).json();
+    expect(events).toMatchObject([{ update_id: 10, type: "button", message_id: 55, choice: "applied" }]);
+    const edit = JSON.parse(calls[0].init.body);
+    expect(calls[0].url).toBe("https://api.telegram.org/botbot-token/editMessageReplyMarkup");
+    expect(edit.reply_markup.inline_keyboard[0].map((b) => b.text)).toEqual(["✅ הגשתי ✓", "❌ לא הגשתי"]);
+  });
+
+  it("the choice is saved even when marking the button fails", async () => {
+    fakeFetch(() => new Response("down", { status: 502 }));
+    expect((await press(11, "skipped")).status).toBe(200);
+    const { events } = await (await agent("GET", "/inbox")).json();
+    expect(events).toHaveLength(1);
+  });
+
+  it("presses from other chats are ignored", async () => {
+    fakeFetch(() => Response.json({ ok: true }));
+    await press(12, "applied", 2000);
+    expect(env.INBOX.data.size).toBe(0);
+  });
+
+  it("a reply to a bot message is feedback, not a job post", async () => {
+    const res = await fromTelegram({
+      update_id: 13,
+      message: { message_id: 60, date: 5, chat: { id: MY_CHAT }, text: "60 דורש 3 שנות ניסיון",
+                 reply_to_message: { message_id: 55, from: { is_bot: true } } },
+    });
+    expect((await res.json()).text).toBe("הפידבק נשמר ✓");
+    const { messages, events } = await (await agent("GET", "/inbox")).json();
+    expect(messages).toEqual([]);
+    expect(events).toEqual([{ update_id: 13, type: "reply", message_id: 55, text: "60 דורש 3 שנות ניסיון", date: 5 }]);
+  });
+
+  it("ack deletes feedback too", async () => {
+    fakeFetch(() => Response.json({ ok: true }));
+    await press(14, "applied");
+    await fromTelegram(update(15, "job"));
+    await agent("POST", "/inbox/ack", { update_ids: [14, 15] });
+    expect(env.INBOX.data.size).toBe(0);
+  });
+
+  it("markChosen moves the mark to the new choice", () => {
+    const once = markChosen(BUTTONS, "applied");
+    const twice = markChosen(once, "skipped");
+    expect(twice.inline_keyboard[0].map((b) => b.text)).toEqual(["✅ הגשתי", "❌ לא הגשתי ✓"]);
+  });
+});
+
+function shareFile(id, file_name, file_size = 1000) {
+  return fromTelegram({
+    update_id: id,
+    message: { message_id: id, date: 1795000000, chat: { id: MY_CHAT }, document: { file_id: "f" + id, file_name, file_size } },
+  });
+}
+
+describe("chat exports", () => {
+  const telegramFiles = (url) => url.includes("/getFile")
+    ? Response.json({ ok: true, result: { file_path: "documents/file_1.zip" } })
+    : new Response(new Uint8Array([80, 75, 3, 4]));
+
+  it("an export file is downloaded from Telegram and kept under its name", async () => {
+    fakeFetch(telegramFiles);
+    const res = await shareFile(20, "צ'אט WhatsApp עם Jobs.zip");
+    expect((await res.json()).text).toMatch(/הייצוא נשמר/);
+    expect(calls[1].url).toBe("https://api.telegram.org/file/botbot-token/documents/file_1.zip");
+
+    const { exports } = await (await agent("GET", "/exports")).json();
+    expect(exports).toEqual([{ name: "צ'אט WhatsApp עם Jobs.zip", received_at: 1795000000, size: 4 }]);
+    const file = await agent("GET", "/exports/file?name=" + encodeURIComponent("צ'אט WhatsApp עם Jobs.zip"));
+    expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([80, 75, 3, 4]);
+  });
+
+  it("a newer export of the same group replaces the older one", async () => {
+    fakeFetch(telegramFiles);
+    await shareFile(21, "Jobs.txt");
+    await shareFile(22, "Jobs.txt");
+    expect((await (await agent("GET", "/exports")).json()).exports).toHaveLength(1);
+  });
+
+  it("files too large for a bot are refused before downloading", async () => {
+    fakeFetch(telegramFiles);
+    const res = await shareFile(23, "big.zip", 50 * 1024 * 1024);
+    expect((await res.json()).text).toMatch(/גדול מדי/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("tells me when the download fails, and stores nothing", async () => {
+    fakeFetch(() => new Response("no", { status: 500 }));
+    expect((await (await shareFile(24, "a.zip")).json()).text).toMatch(/לא הצלחתי/);
+    expect(env.INBOX.data.size).toBe(0);
+  });
+
+  it("export routes need the agent's token, and unknown names are 404", async () => {
+    expect((await agent("GET", "/exports", undefined, "wrong")).status).toBe(401);
+    expect((await agent("GET", "/exports/file?name=nope.zip")).status).toBe(404);
+  });
+
+  it("file names cannot leave the exports folder", () => {
+    expect(safeFileName("../../etc/x.zip")).toBe("x.zip");
+    expect(safeFileName(String.raw`a\..zip`)).toBe("zip");
+    expect(safeFileName("..")).toBe("export.zip");
+  });
+});
+
+describe("/run", () => {
+  it("starts the workflow on GitHub", async () => {
+    fakeFetch(() => new Response(null, { status: 204 }));
+    const res = await fromTelegram(update(30, "/run"));
+    expect((await res.json()).text).toMatch(/התחיל לרוץ/);
+    expect(calls[0].url).toBe("https://api.github.com/repos/me/private/actions/workflows/run.yml/dispatches");
+    expect(calls[0].init.headers.Authorization).toBe("Bearer gh-token");
+    expect(JSON.parse(calls[0].init.body)).toEqual({ ref: "main" });
+    expect(env.INBOX.data.size).toBe(0); // commands are not job posts
+  });
+
+  it("says so when GitHub refuses", async () => {
+    fakeFetch(() => new Response(null, { status: 403 }));
+    expect((await (await fromTelegram(update(31, "/run"))).json()).text).toMatch(/HTTP 403/);
+  });
+
+  it("other commands show the help", async () => {
+    expect((await (await fromTelegram(update(32, "/start"))).json()).text).toMatch(/\/run/);
+  });
 });

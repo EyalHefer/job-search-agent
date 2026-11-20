@@ -11,6 +11,7 @@ from job_agent.digest import write_digest
 from job_agent.memory import Memory
 from job_agent.pipeline import run
 from job_agent.skills import Skills
+from job_agent.telegram import Telegram, TelegramError, send_digest
 
 
 def main() -> None:
@@ -43,8 +44,21 @@ def main() -> None:
         memory.save_last_digest([{**job["item"], "score": job["score"]} for job in result.digest])
         print(message)
         print(f"\nSaved to {out}", file=sys.stderr)
+        if config.telegram:
+            send_to_telegram(result, memory, now)
     else:
         record_feedback(memory, args)
+
+
+def send_to_telegram(result, memory: Memory, now: datetime) -> None:
+    telegram = Telegram.from_env()
+    if telegram is None:
+        sys.exit("telegram is on in the config: set TELEGRAM_BOT_TOKEN and CHAT_ID")
+    try:
+        send_digest(telegram, result.digest, result.stats, now, memory)
+    except TelegramError as e:
+        sys.exit(f"Could not send the digest to Telegram: {e}")
+    print("Sent to Telegram", file=sys.stderr)
 
 
 def record_feedback(memory: Memory, args) -> None:
@@ -56,17 +70,8 @@ def record_feedback(memory: Memory, args) -> None:
         job = jobs[n - 1]
     else:
         job = next((j for j in jobs if j["url"] == args.job), {"url": args.job, "title": None})
-    memory.add_feedback({
-        "date": datetime.now().date().isoformat(),
-        "key": job.get("key"),
-        "url": job["url"],
-        "title": job.get("title"),
-        "company": job.get("company"),
-        "agent_score": job.get("score"),
-        "applied": args.applied == "yes",
-        "match": args.match,
-        "reason": args.reason,
-    })
+    memory.record_decision(job, datetime.now().date(), applied=args.applied == "yes",
+                           match=args.match, reason=args.reason)
     print(f"Saved: {job.get('title') or job['url']}")
 
 

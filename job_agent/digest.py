@@ -4,7 +4,7 @@ from datetime import datetime
 
 
 def write_digest(jobs: list[dict], stats: dict, now: datetime) -> str:
-    lines = [f"*משרות מומלצות · {now:%d.%m.%Y}*", _summary(stats), ""]
+    lines = [f"*משרות מומלצות · {now:%d.%m.%Y}*", summary(stats), ""]
     if not jobs:
         lines.append("לא נמצאו משרות חדשות שמתאימות מספיק.")
     for n, job in enumerate(jobs, 1):
@@ -22,7 +22,7 @@ def write_digest(jobs: list[dict], stats: dict, now: datetime) -> str:
     return "\n".join(lines)
 
 
-def _summary(stats: dict) -> str:
+def summary(stats: dict) -> str:
     parts = [f"{stats.get('new', 0)} משרות חדשות"]
     if stats.get("rejected_by_rules"):
         parts.append(f"{stats['rejected_by_rules']} סוננו לפי הכללים")

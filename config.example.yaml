@@ -15,3 +15,4 @@ read_min_score: 65     # first-round score needed to open the job page
 read_limit: 20         # most job pages opened per run
 digest_min_score: 70
 digest_size: 10
+telegram: false        # true: send the digest to your Telegram chat (TELEGRAM_BOT_TOKEN and CHAT_ID in .env)

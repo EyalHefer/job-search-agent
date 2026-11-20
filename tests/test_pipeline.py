@@ -22,9 +22,10 @@ def job(key, title, company="", text="post text"):
 class FakeSkills:
     """Plays each skill's part, and records what it was given."""
 
-    def __init__(self, posts, first_scores, page_status, second_scores, rejected=(), shared=(), worker_down=False):
+    def __init__(self, posts, first_scores, page_status, second_scores, rejected=(), shared=(), worker_down=False,
+                 events=()):
         self.posts, self.first_scores, self.page_status = posts, first_scores, page_status
-        self.shared, self.worker_down = list(shared), worker_down
+        self.shared, self.worker_down, self.events = list(shared), worker_down, list(events)
         self.second_scores, self.rejected = second_scores, set(rejected)
         self.calls = []
         self.matcher_round = 0
@@ -34,10 +35,14 @@ class FakeSkills:
         if name == "whatsapp-export-reader":
             return self.posts
         if name == "telegram-inbox":
+            if args[0] in ("pull", "exports") and self.worker_down:
+                raise SkillError("telegram-inbox failed (exit code 1)")
             if args[0] == "pull":
-                if self.worker_down:
-                    raise SkillError("telegram-inbox failed (exit code 1)")
-                return {"pulled": len(self.shared), "saved": len(self.shared)}
+                return {"pulled": len(self.shared), "saved": len(self.shared), "events": len(self.events)}
+            if args[0] == "exports":
+                return {"downloaded": []}
+            if args[0] == "events":
+                return self.events
             return self.shared
         if name == "rule-filter":
             return {"kept": [j for j in data if j["key"] not in self.rejected],
@@ -139,8 +144,23 @@ def test_jobs_shared_to_the_bot_join_the_exported_ones(config):
     assert result.digest[0]["item"]["group"] == "Jobs group"   # the export's copy is kept
     assert result.stats["posts"] == 2
     inbox_calls = [args for name, args, _ in skills.calls if name == "telegram-inbox"]
-    assert [a[0] for a in inbox_calls] == ["pull", "read"]
-    assert inbox_calls[1][-2:] == ["--since", "2030-01-01T09:00:00"]
+    assert [a[0] for a in inbox_calls] == ["pull", "exports", "events", "read"]
+    assert inbox_calls[1][1].endswith("telegram")             # shared exports get their own subfolder
+    assert inbox_calls[3][-2:] == ["--since", "2030-01-01T09:00:00"]
+
+
+def test_feedback_from_telegram_is_saved_before_jobs_are_picked(config):
+    config.inbox_dir = config.data_dir / "inbox"
+    memory = Memory(config.data_dir)
+    memory.save_sent_messages({"jobs": {"55": {"key": "a", "url": job("a", "x")["url"], "title": "Automation"}},
+                               "last_event": 0})
+    events = [{"update_id": 1, "type": "button", "message_id": 55, "choice": "skipped"}]
+    skills = FakeSkills([job("a", "Automation"), job("b", "Backend")], {"a": 90, "b": 80},
+                        {"a": "open", "b": "open"}, {"a": 90, "b": 80}, events=events)
+    result = run(config, skills, memory, NOW, log=lambda m: None)
+
+    assert [j["item"]["key"] for j in result.digest] == ["b"]     # a was decided on Telegram
+    assert memory.feedback()[0]["applied"] is False
 
 
 def test_unreachable_inbox_does_not_stop_the_run(config):

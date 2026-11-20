@@ -13,3 +13,9 @@ id = "deec5070093842a388a5a61c59a938e0"
 #   TELEGRAM_SECRET  random string, also given to Telegram in setWebhook
 #   INBOX_TOKEN      random string the agent sends as "Authorization: Bearer ..."
 #   CHAT_ID          my Telegram chat id; messages from any other chat are dropped
+#   TELEGRAM_BOT_TOKEN  to download shared export files and mark the pressed feedback button
+#   GITHUB_TOKEN     fine-grained token with "Actions: write" on the private repo only, for /run
+
+[vars]
+GITHUB_REPO = "EyalHefer/job-search-private"   # the private repo whose workflow runs the agent
+GITHUB_WORKFLOW = "run.yml"

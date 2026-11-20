@@ -60,7 +60,7 @@ def main() -> None:
         print("chat id: saved to .env")
 
     call(token, "setWebhook", {"url": url.rstrip("/") + "/telegram", "secret_token": secret,
-                               "allowed_updates": json.dumps(["message"])})
+                               "allowed_updates": json.dumps(["message", "callback_query"])})
     info = call(token, "getWebhookInfo")
     print("webhook:", info["url"], "| pending:", info.get("pending_update_count", 0))
 
