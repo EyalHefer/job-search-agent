@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import worker, { exportFileName, markChosen, safeFileName, sameSecret } from "../src/index.js";
+import worker, { exportFileName, markChosen, nameFromContent, safeFileName, sameSecret } from "../src/index.js";
 
 // An in-memory stand-in for Cloudflare KV, with the same methods the Worker uses.
 class FakeKV {
@@ -301,5 +301,40 @@ describe("recognizing shared files", () => {
   it("a photo is refused and named as one", async () => {
     const res = await fromTelegram({ update_id: 41, message: { message_id: 41, date: 1, chat: { id: MY_CHAT }, photo: [{}] } });
     expect((await res.json()).text).toContain("photo");
+  });
+});
+
+describe("files with no extension and a generic type", () => {
+  function shareBlob(id, content) {
+    fakeFetch((url) => url.includes("/getFile")
+      ? Response.json({ ok: true, result: { file_path: "documents/f" } })
+      : new Response(content));
+    return fromTelegram({
+      update_id: id,
+      message: { message_id: id, date: 1795000000, chat: { id: MY_CHAT },
+                 document: { file_id: "f", file_name: "Devops קבוצה 2", mime_type: "application/octet-stream", file_size: 10 } },
+    });
+  }
+
+  it("a zip is recognized by its first bytes", async () => {
+    expect((await (await shareBlob(50, new Uint8Array([0x50, 0x4b, 3, 4, 0]))).json()).text).toMatch(/הייצוא נשמר/);
+    expect((await (await agent("GET", "/exports")).json()).exports[0].name).toBe("Devops קבוצה 2.zip");
+  });
+
+  it("a text export is recognized by its first chat line", async () => {
+    await shareBlob(51, "28.10.2026, 14:03 - +972 50-000-0000: *QA* https://x.example/1\n");
+    expect((await (await agent("GET", "/exports")).json()).exports[0].name).toBe("Devops קבוצה 2.txt");
+  });
+
+  it("anything else is refused and not stored", async () => {
+    const { text } = await (await shareBlob(52, "%PDF-1.7 not a chat")).json();
+    expect(text).toContain("application/octet-stream");
+    expect(env.INBOX.data.size).toBe(0);
+  });
+
+  it("nameFromContent", () => {
+    const bytes = (s) => new TextEncoder().encode(s).buffer;
+    expect(nameFromContent(undefined, bytes("[18.11.26, 12:29:01] ~ Dana: hi"))).toBe("export.txt");
+    expect(nameFromContent("x", bytes("hello"))).toBe(null);
   });
 });

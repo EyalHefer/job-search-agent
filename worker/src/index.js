@@ -51,7 +51,7 @@ async function receiveFromTelegram(request, env) {
 
   if (message.text?.startsWith("/")) return command(message.text, chatId, env);
   const exportName = exportFileName(message.document);
-  if (exportName) return receiveExport(message, exportName, env);
+  if (exportName || maybeExport(message.document)) return receiveExport(message, exportName, env);
   if (message.reply_to_message?.from?.is_bot && message.text) return receiveReply(update, env);
 
   const text = message.text ?? message.caption;
@@ -120,6 +120,23 @@ export function exportFileName(document) {
   return null;
 }
 
+// A file with no extension and a generic type ("application/octet-stream") may still be an export:
+// a group name with "/" in it loses everything up to the last "/", extension included, when saved.
+// Such files are downloaded and recognized by their content.
+function maybeExport(document) {
+  return Boolean(document) && (!document.mime_type || document.mime_type === "application/octet-stream");
+}
+
+const CHAT_LINE = /^‎?\[?\d{1,2}[./]\d{1,2}[./]\d{2,4},? \d{1,2}:\d{2}/m; // "28.10.2026, 14:03 - ..."
+
+export function nameFromContent(fileName, bytes) {
+  const base = cleanName(fileName ?? "") || "export";
+  const head = new Uint8Array(bytes.slice(0, 4));
+  if (head[0] === 0x50 && head[1] === 0x4b && head[2] === 3 && head[3] === 4) return base + ".zip";
+  const start = new TextDecoder().decode(bytes.slice(0, 4096));
+  return CHAT_LINE.test(start) ? base + ".txt" : null;
+}
+
 // Says what arrived, so I can tell why it was not taken.
 function refusal(message) {
   const document = message.document;
@@ -142,6 +159,8 @@ async function receiveExport(message, name, env) {
     const response = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`);
     if (!response.ok) throw new Error(`download failed: HTTP ${response.status}`);
     const bytes = await response.arrayBuffer();
+    name ??= nameFromContent(document.file_name, bytes);
+    if (!name) return reply(chatId, refusal(message));
     await env.INBOX.put(EXPORT + name, bytes, {
       expirationTtl: KEEP_SECONDS, metadata: { received_at: message.date, size: bytes.byteLength },
     });
