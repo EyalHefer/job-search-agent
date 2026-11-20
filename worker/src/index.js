@@ -50,11 +50,12 @@ async function receiveFromTelegram(request, env) {
   const chatId = message.chat.id;
 
   if (message.text?.startsWith("/")) return command(message.text, chatId, env);
-  if (isExportFile(message.document)) return receiveExport(message, env);
+  const exportName = exportFileName(message.document);
+  if (exportName) return receiveExport(message, exportName, env);
   if (message.reply_to_message?.from?.is_bot && message.text) return receiveReply(update, env);
 
   const text = message.text ?? message.caption;
-  if (!text) return reply(chatId, "רק טקסט או קובץ ייצוא של צ'אט (zip או txt) נקלטים.");
+  if (!text) return reply(chatId, refusal(message));
 
   // The key is the update_id, so a message Telegram sends twice is stored once.
   const record = { update_id: update.update_id, date: message.date, text };
@@ -107,16 +108,34 @@ function saveEvent(env, updateId, event) {
 
 // ---- chat exports ----
 
-function isExportFile(document) {
-  return Boolean(document) && /\.(zip|txt)$/i.test(document.file_name ?? "");
+// The name to keep a shared file under, or null when it is not a chat export. Phones do not always
+// keep the extension, so the file's type counts too; the agent's reader needs .zip or .txt.
+export function exportFileName(document) {
+  if (!document) return null;
+  const name = cleanName(document.file_name ?? "");
+  if (/\.(zip|txt)$/i.test(name)) return name;
+  const type = document.mime_type ?? "";
+  if (/zip/i.test(type)) return (name || "export") + ".zip";
+  if (/^text\/plain/i.test(type)) return (name || "export") + ".txt";
+  return null;
 }
+
+// Says what arrived, so I can tell why it was not taken.
+function refusal(message) {
+  const document = message.document;
+  const what = document
+    ? `קיבלתי קובץ "${document.file_name ?? "בלי שם"}" מסוג ${document.mime_type ?? "לא ידוע"}.`
+    : `קיבלתי הודעה מסוג ${Object.keys(message).find((k) => MEDIA.includes(k)) ?? "לא ידוע"}.`;
+  return `${what}\nרק טקסט או קובץ ייצוא של צ'אט (zip או txt) נקלטים.`;
+}
+
+const MEDIA = ["photo", "video", "audio", "voice", "sticker", "animation", "contact", "location", "poll"];
 
 // Exports of the groups that allow it, shared from the phone instead of sent by email.
 // A newer export of the same group has the same file name and replaces the older one.
-async function receiveExport(message, env) {
+async function receiveExport(message, name, env) {
   const chatId = message.chat.id;
   const document = message.document;
-  const name = safeFileName(document.file_name);
   if (document.file_size > MAX_FILE_BYTES) return reply(chatId, "הקובץ גדול מדי. ייצא את הצ'אט בלי מדיה.");
   try {
     const file = await callTelegram(env, "getFile", { file_id: document.file_id });
@@ -134,7 +153,11 @@ async function receiveExport(message, env) {
 
 // Keeps only the last part of the name, so it cannot point outside the agent's exports folder.
 export function safeFileName(name) {
-  return String(name).split(/[\\/]/).pop().replace(/[\u0000-\u001f]/g, "").replace(/^\.+/, "").slice(-200) || "export.zip";
+  return cleanName(name) || "export.zip";
+}
+
+function cleanName(name) {
+  return String(name).split(/[\\/]/).pop().replace(/[\u0000-\u001f]/g, "").replace(/^\.+/, "").slice(-200);
 }
 
 async function listExports(env) {

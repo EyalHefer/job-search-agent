@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import worker, { markChosen, safeFileName, sameSecret } from "../src/index.js";
+import worker, { exportFileName, markChosen, safeFileName, sameSecret } from "../src/index.js";
 
 // An in-memory stand-in for Cloudflare KV, with the same methods the Worker uses.
 class FakeKV {
@@ -275,5 +275,31 @@ describe("/run", () => {
 
   it("other commands show the help", async () => {
     expect((await (await fromTelegram(update(32, "/start"))).json()).text).toMatch(/\/run/);
+  });
+});
+
+describe("recognizing shared files", () => {
+  it("a file without an extension is taken by its type", () => {
+    expect(exportFileName({ file_name: "WhatsApp Chat - Jobs", mime_type: "application/zip" })).toBe("WhatsApp Chat - Jobs.zip");
+    expect(exportFileName({ file_name: "Jobs", mime_type: "text/plain" })).toBe("Jobs.txt");
+    expect(exportFileName({ mime_type: "application/x-zip-compressed" })).toBe("export.zip");
+    expect(exportFileName({ file_name: "Jobs.TXT", mime_type: "application/octet-stream" })).toBe("Jobs.TXT");
+  });
+
+  it("other files are refused, with what arrived", async () => {
+    expect(exportFileName({ file_name: "cv.pdf", mime_type: "application/pdf" })).toBe(null);
+    const res = await fromTelegram({
+      update_id: 40,
+      message: { message_id: 40, date: 1, chat: { id: MY_CHAT }, document: { file_id: "x", file_name: "cv.pdf", mime_type: "application/pdf" } },
+    });
+    const { text } = await res.json();
+    expect(text).toContain('"cv.pdf"');
+    expect(text).toContain("application/pdf");
+    expect(env.INBOX.data.size).toBe(0);
+  });
+
+  it("a photo is refused and named as one", async () => {
+    const res = await fromTelegram({ update_id: 41, message: { message_id: 41, date: 1, chat: { id: MY_CHAT }, photo: [{}] } });
+    expect((await res.json()).text).toContain("photo");
   });
 });
